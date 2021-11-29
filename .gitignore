@@ -1,0 +1,13 @@
+.idea/
+__pycache__/
+results/
+figures/
+.DS_Store
+/venv/
+
+*.su2
+*.cfg
+*.txt
+*.foam
+*.vtu
+*.dat
