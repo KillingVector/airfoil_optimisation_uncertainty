@@ -232,9 +232,14 @@ class Design(object):
             pass
         ## uncertainty testers
         elif self.application_id in ['utest','utest_unc','utest_unc2']:
-            self.lift_coefficient   = [0.4, 0.8]
-            self.reynolds           = [5e5, 2e6]
-            self.mach               = [0.2, 0.3]  # [0.1, 0.1]
+            # self.lift_coefficient   = [0.4, 0.8]
+            # self.reynolds           = [5e5, 2e6]
+            # self.mach               = [0.2, 0.3]  # [0.1, 0.1]
+            self.lift_coefficient   = [0.4, 0.8, 0.85, 1.25]
+            design_re               = 1e6 * 0.8 ** 0.5  # xfoil type 2 style ( so Re*sqrt(Cl is constant)
+            self.reynolds           = [design_re / c_l ** 0.5 for c_l in self.lift_coefficient]
+            design_ma               = 0.2 * 0.8
+            self.mach               = [design_ma / c_l ** 0.5 for c_l in self.lift_coefficient]
             self.alpha              = [0.0, 0.0]
             self.alpha              = [a*(np.pi/180) for a in self.alpha]
             self.obj_weight         = None
