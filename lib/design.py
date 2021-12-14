@@ -238,7 +238,7 @@ class Design(object):
             # self.lift_coefficient   = [0.4, 0.8]
             # self.reynolds           = [5e5, 2e6]
             # self.mach               = [0.2, 0.3]  # [0.1, 0.1]
-            self.lift_coefficient   = [0.1, 0.6, 0.6, 1.1]
+            self.lift_coefficient   = [0.3, 0.6, 1.1]
             design_re               = 1e6 * 0.6 ** 0.5  # xfoil type 2 style ( so Re*sqrt(Cl is constant)
             self.reynolds           = [design_re / c_l ** 0.5 for c_l in self.lift_coefficient]
             design_ma               = 0.2 * 0.6 ** 0.5

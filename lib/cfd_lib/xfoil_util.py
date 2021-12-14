@@ -109,7 +109,7 @@ class Xfoil(object):
                     raise Exception ('xfoil type 2 analysis does not handle c_l < 0')
                 else:
                     f.write('{} {:.3f}\n'.format('cl', airfoil_state.c_l))
-            else
+            else:
                 raise Exception('xfoil analysis type undefined or not accepted, must be 1 or 2')
 
             # Disabling polar accumulation
@@ -342,7 +342,7 @@ def xfoil_wrapper_max_lift(design, state, solver, n_core, use_python_xfoil=False
 
     # Instantiate solver manager instance
     # TODO set up xtr (set up in design.py and should be passed into here
-    xfoil_manager = Xfoil(n_crit=design.n_crit,transition_location=design.transition_location, analysis_type=design.xfoil_analysis_type))
+    xfoil_manager = Xfoil(n_crit=design.n_crit,transition_location=design.transition_location, analysis_type=design.xfoil_analysis_type)
 
     if use_python_xfoil:
         results = python_xfoil_wrapper(design, state, xfoil_format, xfoil_manager)
