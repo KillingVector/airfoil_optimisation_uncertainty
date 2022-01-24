@@ -54,9 +54,6 @@ class Design(object):
         # Initialise Uncertainty
         self.sigma_confidence = 1 # number of std devs in uncertainty bounds
 
-        # XFOIL ONLY - Analysis type
-        self.xfoil_analysis_type = 1
-
     def set_operating_conditions(self):
         """
         This is where you set the operating conditions. Set up a new application_id if you want to change conditions for
@@ -238,10 +235,10 @@ class Design(object):
             # self.lift_coefficient   = [0.4, 0.8]
             # self.reynolds           = [5e5, 2e6]
             # self.mach               = [0.2, 0.3]  # [0.1, 0.1]
-            self.lift_coefficient   = [0.3, 0.6, 1.1]
-            design_re               = 1e6 * 0.6 ** 0.5  # xfoil type 2 style ( so Re*sqrt(Cl is constant)
+            self.lift_coefficient   = [0.4, 0.8, 0.85, 1.25]
+            design_re               = 1e6 * 0.8 ** 0.5  # xfoil type 2 style ( so Re*sqrt(Cl is constant)
             self.reynolds           = [design_re / c_l ** 0.5 for c_l in self.lift_coefficient]
-            design_ma               = 0.2 * 0.6 ** 0.5
+            design_ma               = 0.2 * 0.8
             self.mach               = [design_ma / c_l ** 0.5 for c_l in self.lift_coefficient]
             self.alpha              = [0.0, 0.0]
             self.alpha              = [a*(np.pi/180) for a in self.alpha]
@@ -251,8 +248,6 @@ class Design(object):
             self.n_crit             = 9
             self.transition_location= [1.0, 1.0]
             self.uncertainty_weight = 1.0
-            ## SET DESIGN TYPE
-            self.xfoil_analysis_type= 2
         else:
             raise Exception('This case is not implemented yet')
 

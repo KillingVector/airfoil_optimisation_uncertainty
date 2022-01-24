@@ -1,0 +1,12 @@
+  
+       XFOIL         Version 6.99
+  
+ Calculated polar for: utest_0                                         
+  
+ 2 2 Reynolds number ~ 1/sqrt(CL)   Mach number ~ 1/sqrt(CL)  
+  
+ xtrf =   1.000 (top)        1.000 (bottom)  
+ Mach =   0.179     Re =     1.000 e 6     Ncrit =   9.000  9.000
+  
+   alpha    CL        CD       CDp       CM     Top_Xtr  Bot_Xtr  Top_Itr  Bot_Itr
+  ------ -------- --------- --------- -------- -------- -------- -------- --------

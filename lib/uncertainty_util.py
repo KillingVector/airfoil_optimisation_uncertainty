@@ -89,8 +89,7 @@ def create_model(nodes = None, weights = None, evals = None, joint = None, order
         try:
             model       = cp.fit_quadrature(expansion, nodes, weights, evals)
         except Exception as e:
-            print(e)
-            print('fuck')
+            model = None
     else:
         expansion   = None
         model       = None
@@ -146,17 +145,23 @@ def get_statistics(model = None, distribution = None):
     # >3 means that the data has a high central concentration, but also strong outlier presence
     # kurtosis can indicate the difference between a cosine distribution (<3) and a normal (3) - useful in predicting x-sigma requirements for capturing all possible data.
 
-    mean    = np.float64(cp.E(model, distribution))
-    std     = cp.Std(model, distribution)
-    variance= np.float64(cp.Var(model, distribution))
-    sobol   = cp.Sens_m(model, distribution) # there are three sobol options
-    
-    skew    = np.float64(cp.Skew(model, distribution))
-    kurt    = np.float64(cp.Kurt(model, distribution))
+    try:
+        mean    = np.float64(cp.E(model, distribution))
+        std     = cp.Std(model, distribution)
+        variance= np.float64(cp.Var(model, distribution))
+        sobol   = cp.Sens_m(model, distribution) # there are three sobol options
 
-    stats1 = [mean, std, variance, skew, kurt]
+        skew    = np.float64(cp.Skew(model, distribution))
+        kurt    = np.float64(cp.Kurt(model, distribution))
 
-    stats = [stats1, sobol]
+        stats1 = [mean, std, variance, skew, kurt]
+        stats = [stats1, sobol]
+    except Exception as e:
+        # this is generally used for C_l in sweep simulations, as the same C_l is used,
+        # and thus there are nan and zero stat values
+        sobol = [-1, -1]
+        stats1 = [-1, -1, -1, -1, -1]
+        stats = [stats1, sobol]
     return stats
     
 # TODO move to sim_unc.py

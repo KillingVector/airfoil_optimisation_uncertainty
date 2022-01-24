@@ -9,7 +9,7 @@ import lib.solver_settings as solver_settings
 
 class Xfoil(object):
 
-    def __init__(self, n_crit, transition_location, analysis_type = 1):
+    def __init__(self, n_crit, transition_location):
         """
         initialisation of the xfoil object
         :param n_crit: critical value for the e^n transition method of xfoil
@@ -19,7 +19,6 @@ class Xfoil(object):
         self.n_crit = n_crit
         self.transition_location = transition_location # transition location for boundary layer solver
         self._use_gdes = False  # use xfoil's gdes routine to re-panel the airfoil (should not be needed)
-        self.analysis_type = analysis_type
 
     def write_input(self, airfoil_name, airfoil_state, xfoil_format='set_alpha', identifier=0):
         """
@@ -72,13 +71,6 @@ class Xfoil(object):
             # Setting the Reynolds number
             f.write('{} {:.0f}\n'.format('visc', airfoil_state.reynolds))
 
-            # Setting the analysis
-            # Type      Cons Param                  Var     Fixed
-            #  1        M,          Re              lift    chord, vel
-            #  2        M sqrt(CL), Re sqrt(CL)     vel     chord, lift
-            #  3        M,          Re CL           chord   lift, vel !!! not setup
-            f.write('{} {:d}\n'.format('type',self.analysis_type))
-
             # Initialising the boundary layer
             f.write('{}\n{}\n'.format('init', 'init'))
             if xfoil_format == 'set_alpha':
@@ -88,29 +80,19 @@ class Xfoil(object):
             else:
                 raise Exception('xfoil format undefined')
 
-
             # Enabling polar accumulation
             f.write('{}\n'.format('pacc'))
 
             # Setting the file name
             f.write('{}\n\n'.format(airfoil_name + '_' + str(identifier) + '.pol'))
 
-            #
-            if self.analysis_type == 1:
-                # Setting target angle-of-attack or lift coefficient
-                if xfoil_format == 'set_alpha':
-                    f.write('{} {:.3f}\n'.format('alfa', airfoil_state.alpha * 180.0 / np.pi))
-                elif xfoil_format == 'set_cl':
-                    f.write('{} {:.3f}\n'.format('cl', airfoil_state.c_l))
-                else:
-                    raise Exception('xfoil format undefined')
-            elif self.analysis_type == 2:
-                if airfoil_state.c_l < 0:
-                    raise Exception ('xfoil type 2 analysis does not handle c_l < 0')
-                else:
-                    f.write('{} {:.3f}\n'.format('cl', airfoil_state.c_l))
+            # Setting target angle-of-attack or lift coefficient
+            if xfoil_format == 'set_alpha':
+                f.write('{} {:.3f}\n'.format('alfa', airfoil_state.alpha * 180.0 / np.pi))
+            elif xfoil_format == 'set_cl':
+                f.write('{} {:.3f}\n'.format('cl', airfoil_state.c_l))
             else:
-                raise Exception('xfoil analysis type undefined or not accepted, must be 1 or 2')
+                raise Exception('xfoil format undefined')
 
             # Disabling polar accumulation
             f.write('{}\n'.format('pacc'))
@@ -304,7 +286,7 @@ def xfoil_wrapper(design, state, solver, n_core, use_python_xfoil=False, identif
 
     # Instantiate solver manager instance
     # TODO set up xtr (set up in design.py and should be passed into here
-    xfoil_manager = Xfoil(n_crit=design.n_crit,transition_location=design.transition_location, analysis_type=design.xfoil_analysis_type)
+    xfoil_manager = Xfoil(n_crit=design.n_crit,transition_location=design.transition_location)
 
     if use_python_xfoil:
         results = python_xfoil_wrapper(design, state, xfoil_format, xfoil_manager)
@@ -342,7 +324,7 @@ def xfoil_wrapper_max_lift(design, state, solver, n_core, use_python_xfoil=False
 
     # Instantiate solver manager instance
     # TODO set up xtr (set up in design.py and should be passed into here
-    xfoil_manager = Xfoil(n_crit=design.n_crit,transition_location=design.transition_location, analysis_type=design.xfoil_analysis_type)
+    xfoil_manager = Xfoil(n_crit=design.n_crit,transition_location=design.transition_location)
 
     if use_python_xfoil:
         results = python_xfoil_wrapper(design, state, xfoil_format, xfoil_manager)

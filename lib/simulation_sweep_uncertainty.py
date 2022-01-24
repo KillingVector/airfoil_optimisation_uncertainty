@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import subprocess
+from scipy.interpolate import interp1d, InterpolatedUnivariateSpline
 
 from lib import config
 from lib.graphics import plot_geometry
@@ -10,6 +11,8 @@ from lib.util import write_obj_cons_uncertainty
 from lib import flight
 
 from lib import uncertainty_util as ut
+
+from inspect import currentframe, getframeinfo
 
 def airfoil_analysis(design, sol_idx, write_quick_history=True, plot=False, print_output=False, debug=False, **kwargs):
     """
@@ -43,7 +46,7 @@ def airfoil_analysis(design, sol_idx, write_quick_history=True, plot=False, prin
     objective = np.ones(design.n_obj)
     constraint = np.zeros(design.n_con)
     performance = [0] * design.n_fc
-    
+
     # Initialise Uncertainty values
     uncertainty = np.ones((design.n_obj, 6))
     # each row is uncertainty for sp obj
@@ -51,17 +54,13 @@ def airfoil_analysis(design, sol_idx, write_quick_history=True, plot=False, prin
 
     # Evaluation function
     cfd_eval = None
-    if config.settings.solver.lower() in ['su2', 'openfoam']:
-        if config.settings.mesher.lower() == 'gmsh':
-            cfd_eval = gmsh_util.run_single_element
-        elif config.settings.mesher.lower() == 'construct2d':
-            cfd_eval = construct2d_util.run_single_element
-    elif config.settings.solver.lower() in ['xfoil', 'xfoil_python']:
-        cfd_eval = xfoil_util.xfoil_wrapper
-    elif config.settings.solver.lower() == 'mses':
-        cfd_eval = mses_util.mses_wrapper
+    if config.settings.solver.lower() == 'mses':
+        cfd_eval = mses_util.mses_wrapper_sweep_optimisation
     else:
-        raise Exception('Solver not valid')
+        raise Exception('Sweep has only been set up for mses')
+
+    # test geometry:
+    # design
 
     # Run thickness checks
     geometry_check(design, objective, constraint)
@@ -70,85 +69,224 @@ def airfoil_analysis(design, sol_idx, write_quick_history=True, plot=False, prin
     result = Result(design.n_fc)
 
     # Evaluate airfoil performance
+    failed_flight_condition = False
     if design.viable:
         for fc_idx in range(design.n_fc):
-            # TODO uncertainty setup here - may need calculations
-            # uncertainty_util imported as ut
-            unc     = config.settings.uncertainty
+            '''UNCERTAINTY'''
+            unc = config.settings.uncertainty
             var, dist_list, nodes, weights, dist = robust_init(unc, design, fc_idx)
+            eval_cl = []
+            eval_cd = []
+            eval_cm = []
+            eval_ld = []
 
-            # get result evaluations
-            eval_cl     = []
-            eval_cd     = []
-            eval_cm     = []
-            eval_ld     = []
-            # CFD evaluation of airfoil performance
-            try:
-                for i,node in enumerate(nodes.T):
-                    design = robust_node_assignment(unc, design, node, fc_idx)
-                    current_result = cfd_eval(design, design.flight_condition[fc_idx],
+            for j,node in enumerate(nodes.T):
+                '''UNCERTAINTY'''
+                design = robust_node_assignment(unc, design, node, fc_idx)
+                # set up the flight condition
+                alpha_init = 0 #-4
+                alpha_final = 4 #14
+                alpha_step = 0.125
+                target_c_l = design.flight_condition[fc_idx].c_l
+                lift_coefficient = None
+                alpha = np.linspace(alpha_init, alpha_final, int((alpha_final - alpha_init)/alpha_step)+1)
+                alpha = [i * np.pi / 180 for i in alpha]
+                reynolds = [design.flight_condition[fc_idx].reynolds] * np.ones(len(alpha))
+                mach = [design.flight_condition[fc_idx].mach] * np.ones(len(alpha))
+
+                n_fc = len(reynolds)
+                flight_condition = [flight.FlightCondition() for _ in range(n_fc)]
+                for i, re in enumerate(reynolds):
+                    flight_condition[i].set(h=0.0, reynolds=re, mach=mach[i])
+                    flight_condition[i].alpha = alpha[i]
+
+                # CFD evaluation of airfoil performance
+                try:
+                    current_result = cfd_eval(design, flight_condition,
                                               config.settings.solver,
                                               config.settings.n_core,
                                               identifier=sol_idx,
-                                    use_python_xfoil=config.settings.use_python_xfoil,
+                                              use_python_xfoil=config.settings.use_python_xfoil,
                                               **kwargs)
-                    print("\t\t EVAL SUCCESS")
-                    eval_cl.append(current_result.c_l)
-                    eval_cd.append(current_result.c_d)
-                    eval_cm.append(current_result.c_m)
-                    clcd    = current_result.c_l / current_result.c_d
-                    eval_ld.append(clcd)
-            except Exception as e:
-                print(e)
-                print("\t\t IT FAILED")
-                current_result = None
+                    current_result.c_l
+                    if np.max(current_result.c_l) < target_c_l:
+                        current_result = None
+                    elif np.min(current_result.c_l) > target_c_l:
+                        current_result = None
+                except Exception:
+                    current_result = None
 
-            if current_result:
+                # Assign results
+                if current_result:
+                    if fc_idx < (design.n_fc - 1):
+                        # set up the interpolation
+                        # interpolate C_l to find alpha
+                        f_lift = interp1d(current_result.c_l, current_result.alpha, kind='cubic')
+                        # add check to see if we are not extrapolating
+                        alpha_target = f_lift(target_c_l)
+                        if np.max(current_result.alpha) < alpha_target:
+                            current_result = None
+                            c_l = -1
+                            c_d = -1
+                            c_m = -1
+                        elif np.min(current_result.alpha) > alpha_target:
+                            current_result = None
+                            c_l = -1
+                            c_d = -1
+                            c_m = -1
+                        else:
+                            f_drag = interp1d(current_result.alpha, current_result.c_d, kind='cubic')
+                            c_d = f_drag(alpha_target)
+                            # f_lift_inv = interp1d(current_result.alpha, current_result.c_l, kind='cubic')
+                            # c_l = f_lift_inv(alpha_target)
+                            c_l = target_c_l
+                            f_pitch = interp1d(current_result.alpha, current_result.c_m, kind='cubic')
+                            c_m = f_pitch(alpha_target)
+
+
+                        current_result2 = Result(1)
+                        current_result2.c_l = c_l
+                        current_result2.c_d = c_d
+                        current_result2.c_m = c_m
+
+                        eval_cl.append(c_l)
+                        eval_cd.append(c_d)
+                        eval_cm.append(c_m)
+                        clcd = current_result2.c_l / current_result2.c_d
+                        eval_ld.append(clcd)
+                        # TODO update to make more robust. For now this assumes that the number of objectives sets the flight conditions for the objectives\
+                        # If there are more flight conditions than objectives they are used to set the max lift constraint
+                        # last flight condition is the max lift requirement
+                        #### calculate_constraints(design, current_result2, constraint, fc_idx)
+                    else:
+                        idx_max = np.argmax(current_result.c_l)
+                        c_l = current_result.c_l[idx_max]
+                        c_d = current_result.c_d[idx_max]
+                        c_m = current_result.c_m[idx_max]
+
+                        current_result2 = Result(1)
+                        current_result2.c_l = c_l
+                        current_result2.c_d = c_d
+                        current_result2.c_m = c_m
+
+                        eval_cl.append(c_l)
+                        eval_cd.append(c_d)
+                        eval_cm.append(c_m)
+                        clcd = current_result2.c_l / current_result2.c_d
+                        eval_ld.append(clcd)
+                else: # current_result = None
+                    current_result = None
+            # nodes end
+            '''GENERATE UNCERTAINTY MODELS'''
+            if current_result and not len(eval_cl) == 0:
                 evals = [eval_cl, eval_cd, eval_cm, eval_ld]
                 evals, nodes, weights, fail_cases = robust_fail_checker(evals, nodes, weights, FAIL_CRITERIA=-1)
+                if len(fail_cases) < 2*unc.order+1:
+                    models = robust_model_generation(evals, nodes, weights, dist, unc)
+                    stats = robust_generate_stats(dist, models)
+                    current_result = set_current_result(stats)
+                elif current_result and len(fail_cases) >= 2*unc.order+1:
+                    current_result = None
+            else:
+                current_result = Result(1)
+                failed_flight_condition = True
+            '''UNCERTAINTY RESULTS ASSIGNMENT'''
+            if current_result: # should always be true, \_(o_o)_/
+                calculate_constraints(design, current_result, constraint, fc_idx)
+                result          = set_result(fc_idx, current_result, result)
+            # run again if last run is failed
 
-            # if too many cases are failed cases, then they cannot be run
-            # TODO uncertainty
-            if current_result and len(fail_cases) < 2*unc.order+1:
-                models = robust_model_generation(evals, nodes, weights, dist, unc)
-                stats = robust_generate_stats(dist, models)
-                # stats[0] [mean, std, variance, skew, kurtosis]
-                # stats[1] sobol sensitivity
-            elif current_result and len(fail_cases) >= 2*unc.order+1:
-                current_result = None
+        if result.c_l[-1] == -1:
+            # some flight condition did not converge so need to re_run the last one
+            '''UNCERTAINTY'''
+            unc = config.settings.uncertainty
+            var, dist_list, nodes, weights, dist = robust_init(unc, design, fc_idx)
+            eval_cl = []
+            eval_cd = []
+            eval_cm = []
+            eval_ld = []
+            for i, node in enumerate(nodes.T):
+                '''UNCERTAINTY'''
+                design = robust_node_assignment(unc, design, node, fc_idx)
 
-            # Assign results
-            if current_result:
-                # Assign results
-                # set current result into uncertainty format
-                current_result = set_current_result(stats)
-                result  = set_result(fc_idx, current_result, result)
+                fc_idx = design.n_fc - 1
+                alpha_init = -4
+                alpha_final = 15
+                alpha_step = 0.125
+                target_c_l = design.flight_condition[fc_idx].c_l
+                lift_coefficient = None
+                alpha = np.linspace(alpha_init, alpha_final, int((alpha_final - alpha_init) / alpha_step) + 1)
+                alpha = [i * np.pi / 180 for i in alpha]
+                reynolds = [design.flight_condition[fc_idx].reynolds] * np.ones(len(alpha))
+                mach = [design.flight_condition[fc_idx].mach] * np.ones(len(alpha))
 
-                # TODO update to make more robust. For now this assumes that the number of objectives sets the flight conditions for the objectives\
-                # If there are more flight conditions than objectives they are used to set the max lift constraint
-                if fc_idx < design.n_obj:
-                    # Calculate objectives here
-                    calculate_objectives(design, current_result, objective, uncertainty, fc_idx)
-                    # Calculate constraints here
-                    calculate_constraints(design, current_result, constraint, fc_idx)
-                else:
+                n_fc = len(reynolds)
+                flight_condition = [flight.FlightCondition() for _ in range(n_fc)]
+                for i, re in enumerate(reynolds):
+                    flight_condition[i].set(h=0.0, reynolds=re, mach=mach[i])
+                    flight_condition[i].alpha = alpha[i]
+
+                # CFD evaluation of airfoil performance
+                try:
+                    current_result = cfd_eval(design, flight_condition,
+                                              config.settings.solver,
+                                              config.settings.n_core,
+                                              identifier=sol_idx,
+                                              use_python_xfoil=config.settings.use_python_xfoil,
+                                              **kwargs)
+                except Exception:
+                    current_result = None
+                if current_result:
+                    idx_max = np.argmax(current_result.c_l)
+                    c_l = current_result.c_l[idx_max]
+                    c_d = current_result.c_d[idx_max]
+                    c_m = current_result.c_m[idx_max]
+
+                    current_result2 = Result(1)
+                    current_result2.c_l = c_l
+                    current_result2.c_d = c_d
+                    current_result2.c_m = c_m
+                    '''UNCERTAINTY EVALUATION ASSIGNMENT'''
+                    eval_cl.append(c_l)
+                    eval_cd.append(c_d)
+                    eval_cm.append(c_m)
+                    clcd = c_l / c_d
+                    eval_ld.append(clcd)
+                    # TODO update to make more robust. For now this assumes that the number of objectives sets the flight conditions for the objectives\
+                    # If there are more flight conditions than objectives they are used to set the max lift constraint
                     # last flight condition is the max lift requirement
-                    calculate_constraints(design, current_result, constraint, fc_idx)
-
+            '''GENERATE UNCERTAINTY MODELS'''
+            if current_result and not len(eval_cl) == 0:
+                evals = [eval_cl, eval_cd, eval_cm, eval_ld]
+                evals, nodes, weights, fail_cases = robust_fail_checker(evals, nodes, weights, FAIL_CRITERIA=-1)
+                if len(fail_cases) < 2*unc.order+1:
+                    models = robust_model_generation(evals, nodes, weights, dist, unc)
+                    stats = robust_generate_stats(dist, models)
+                    current_result = set_current_result(stats)
+                elif current_result and len(fail_cases) >= 2*unc.order+1:
+                    current_result = None
+            else:
+                current_result = Result(1)
+                failed_flight_condition = True
+            '''UNCERTAINTY RESULTS ASSIGNMENT'''
+            if current_result: # should always be true, \_(o_o)_/
+                calculate_constraints(design, current_result, constraint, fc_idx)
+                result          = set_result(fc_idx, current_result, result)
+                '''Calculate Objectives'''
+                calculate_objectives(design, current_result, objective, uncertainty, fc_idx)
+            # end nodes
             else:
                 print('Solver did not converge')
                 for fc_idx_2 in range(fc_idx, design.n_fc):
                     # Dummy values to represent non-converged solution for remaining flight conditions
                     current_result = Result(1)
-                    if fc_idx_2 < design.n_obj:
-                        # Calculate objectives here
-                        calculate_objectives(design, current_result, objective, uncertainty, fc_idx_2)
-                        # Calculate constraints here
-                        calculate_constraints(design, current_result, constraint, fc_idx_2)
-                    else:
-                        # last flight condition is the max lift requirement
-                        calculate_constraints(design, current_result, constraint, fc_idx_2)
-                break
+                    result          = set_result(fc_idx, current_result, result)
+                    # Calculate constraints here
+                    calculate_constraints(design, current_result, constraint, fc_idx_2)
+                    success = False
+                    break
+
+
     else:
         # two additional constraints are cross-over check and max thickness check
         n_base = 2  # cross-over and max thickness
@@ -163,7 +301,6 @@ def airfoil_analysis(design, sol_idx, write_quick_history=True, plot=False, prin
 
     # TODO need to add pitching moment constraint here - set up a run at zero angle of attack
     # Normalise objectives if necessary
-    print('----------------------------------------')
     normalise_objectives(design, objective)
 
     print('objective =', objective)
@@ -177,6 +314,7 @@ def airfoil_analysis(design, sol_idx, write_quick_history=True, plot=False, prin
         plot_geometry(airfoil, **kwargs)
 
     subprocess.run(['rm -rf ' + abs_path], shell=True)
+
     return objective, constraint, performance
 
 
@@ -188,7 +326,6 @@ def geometry_check(design, objective, constraint):
     :param constraint: returns the values of the geometric constraint violations
     :return: None. All instances get updated inside the function
     """
-
     # create the geometry and calculate thickness
     temp = design.airfoil
     temp.calc_thickness_and_camber()
@@ -199,6 +336,7 @@ def geometry_check(design, objective, constraint):
         # TODO might need to remove the scaling factors when surrogates are used - to be checked
         #  (not needed if normalised in a sklearn pipeline)
         constraint[0] += -1000.0 * np.amin(temp.thickness)
+        constraint[1:] += 1000
         design.viable = False
 
     # Maximum thickness check
@@ -207,21 +345,21 @@ def geometry_check(design, objective, constraint):
         print('np.amax(airfoil_thickness) =', np.amax(temp.thickness))
         # TODO might need to remove the scaling factors when surrogates are used - to be checked
         #  (not needed if normalised in a sklearn pipeline)
-        constraint[1] += 10000.0 * (design.max_thickness_constraint - np.amax(temp.thickness))
+        constraint[1] += 1000.0 * (design.max_thickness_constraint - np.amax(temp.thickness))
 
-    # Maximum thickness check - allow slightly thinner airfoils
-    if np.amax(temp.thickness) < 0.8 * design.max_thickness_constraint:
-        print('Maximum thickness less than 80% of required thickness - set as a non-viable geometry')
-        # TODO might need to remove the scaling factors when surrogates are used - to be checked
-        #  (not needed if normalised in a sklearn pipeline)
-        constraint[1] += 10000.0 * (design.max_thickness_constraint - np.amax(temp.thickness))
-        design.viable = False
+    # # Maximum thickness check - allow slightly thinner airfoils
+    # if np.amax(temp.thickness) < 0.8 * design.max_thickness_constraint:
+    #     print('Maximum thickness less than 80% of required thickness - set as a non-viable geometry')
+    #     # TODO might need to remove the scaling factors when surrogates are used - to be checked
+    #     #  (not needed if normalised in a sklearn pipeline)
+    #     constraint[1] += 10000.0 * (design.max_thickness_constraint - np.amax(temp.thickness))
+    #     design.viable = False
 
     # # TODO for now this is only set up for Skawinski
     if np.amax(temp.thickness) > design.max_thickness_margin*design.max_thickness_constraint:
         print('Maximum thickness check failed')
         print('np.amax(airfoil_thickness) =', np.amax(temp.thickness))
-        constraint[1] += 10000.0 * (np.amax(temp.thickness) -
+        constraint[1] += 1000.0 * (np.amax(temp.thickness) -
                                     design.max_thickness_margin*design.max_thickness_constraint)
 
     # local Thickness check
@@ -301,8 +439,6 @@ def calculate_objectives(design, result, objective, uncertainty, fc_idx):
             # objective[idx] += -weight * result.c_l
 
 
-
-
 def normalise_objectives(design, objective):
     """
     normalises the objectives in cases of weighted calculations
@@ -370,46 +506,50 @@ def calculate_pitching_moment_constraint(design, result, constraint):
     :param constraint: list of all the constraints
     :return: None - everything gets updated inside the function
     """
-    unc = config.settings.uncertainty
-    # max or min?
-    cm = max(np.abs(result.c_m - unc.sigma * result.cm_stats[0]), np.abs(result.c_m + result.cm_stats[0]))
-#    constraint[-1] = 100.0 * (design.pitching_moment - cm)
     constraint[-1] = 100.0 * (design.pitching_moment - result.c_m)
 
 
-## uncertainty utility
-def set_current_result(stats_cl, stats_cd, stats_cm, stats_ld):
-    current_result = Result(1)
-    ll = len(stats_cl[0])
-    current_result.c_l = stats_cl[0][0]
-    current_result.c_d = stats_cd[0][0]
-    current_result.c_m = stats_cm[0][0]
-    current_result.l_d = stats_ld[0][0]
-    current_result.cl_stats = stats_cl[0][1:ll]
-    current_result.cd_stats = stats_cd[0][1:ll]
-    current_result.cm_stats = stats_cm[0][1:ll]
-    current_result.ld_stats = stats_ld[0][1:ll]
-    current_result.cl_sens = stats_cl[1]
-    current_result.cd_sens = stats_cd[1]
-    current_result.cm_sens = stats_cm[1]
-    current_result.ld_sens = stats_ld[1]
-    return current_result
-
-def set_result(fc_idx, current_result, result):
+def calculate_max_lift_objective_and_constraint(design, solver, mesher, n_core, use_python_xfoil, sol_idx,
+                                                objective,constraint,**kwargs):
+    flight_condition = flight.FlightCondition()
+    flight_condition.set(h=0.0, reynolds=design.reynolds[-1], mach=design.mach[-1])
+    flight_condition.alpha = design.max_lift_angle[0]
+    cfd_eval = None
+    if solver.lower() in ['su2', 'openfoam']:
+        if mesher.lower() == 'gmsh':
+            cfd_eval = gmsh_util.run_single_element
+        elif mesher.lower() == 'construct2d':
+            cfd_eval = construct2d_util.run_single_element
+    elif solver.lower() in ['xfoil', 'xfoil_python']:
+        cfd_eval = xfoil_util.xfoil_wrapper_max_lift
+    else:
+        raise Exception('Solver not set up yet for a max lift case')
+    try:
+        current_result = cfd_eval(design, flight_condition,
+                                  solver,
+                                  n_core,
+                                  identifier=sol_idx,
+                                  use_python_xfoil=use_python_xfoil,
+                                  **kwargs)
+    except Exception:
+        current_result = None
     # Assign results
-    result.c_l[fc_idx] = current_result.c_l
-    result.c_d[fc_idx] = current_result.c_d
-    result.c_m[fc_idx] = current_result.c_m
-    result.l_d[fc_idx] = current_result.l_d
-    result.cl_stats[fc_idx, :] = current_result.cl_stats
-    result.cd_stats[fc_idx, :] = current_result.cd_stats
-    result.cm_stats[fc_idx, :] = current_result.cm_stats
-    result.ld_stats[fc_idx, :] = current_result.ld_stats
-    result.cl_sens[fc_idx, :] = current_result.cl_sens
-    result.cd_sens[fc_idx, :] = current_result.cd_sens
-    result.cm_sens[fc_idx, :] = current_result.cm_sens
-    result.ld_sens[fc_idx, :] = current_result.ld_sens
-    return result
+    result_max_lift = Result(1)
+    if current_result:
+        # Assign results
+        result_max_lift.c_l = current_result.c_l
+        result_max_lift.c_d = current_result.c_d
+        result_max_lift.c_m = current_result.c_m
+        # Calculate constraints
+    else:
+        print('Solver did not converge')
+    # calculate the objective
+    for idx, obj in enumerate(design.objective):
+        if obj == 'max_lift':
+            objective[idx] = -result_max_lift.c_l
+    # calculate the constraint
+    constraint[-1] = 100.0 * (design.max_lift_constraint - result_max_lift.c_l)
+
 
 '''UNCERTAINTY UTILITIES'''
 def robust_init(uncertainty_module, design, fc_idx):

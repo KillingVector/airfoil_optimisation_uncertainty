@@ -9,7 +9,7 @@ from mpi4py import MPI
 from lib import config, util
 from lib.design import Design
 
-from cases.single_element_setup import SingleElementSetup
+
 from optimisation.model.problem import Problem
 from optimisation.algorithms.shamode_wo import SHAMODE
 from optimisation.optimise import minimise
@@ -27,12 +27,14 @@ def main(attempt_number):
     import os
     os.system('rm *.inp *.txt')
     
-    population_size = 5
+    population_size = 1
     # ratio of final population to initial population
-    population_ratio = 0.5
-    nr_of_generations = 150
+    population_ratio = 1#0.5
+    nr_of_generations = 5
 
-    attempt_number = 2
+    num_cores = 8
+
+    attempt_number = 1
     uncert_tag  = 'MRe'
     uncert_dist = [0.1,0.075]
     # # Case name # don't run Skawinsky or eVTOL, eqns aren't setup
@@ -53,7 +55,7 @@ def main(attempt_number):
     util.cleanup_quick_results()
 
     # Set up solver
-    solver_name = 'xfoil'   # options are 'xfoil','xfoil_python',
+    solver_name = 'mses'   # options are 'xfoil','xfoil_python',
                             # 'mses',su2','openfoam','su2_gmsh','openfoam_gmsh'
     setup_solver(solver_name, config)
     
@@ -73,7 +75,7 @@ def main(attempt_number):
     # nr_design_variables = 2 * (cst_order + 1)
     
     parametrisation_method = 'CSTmod'
-    cst_order = 5
+    cst_order = 4
     nr_design_variables = 2*(cst_order+1)+1
 
     # parametrisation_method = 'Bspline'
@@ -98,13 +100,18 @@ def main(attempt_number):
     config.design = Design(parametrisation_method, nr_design_variables,
                            application_id=config.case_name, design_objectives=design_objectives)
 
+    if solver_name.lower() == 'mses':
+        from cases.single_element_setup_sweep import SingleElementSetup
+    else:
+        from cases.single_element_setup import SingleElementSetup
+
     # Problem setup - this is where you add all the objectives and constraints to the setup (in lib)
     setup = SingleElementSetup()
 
     # Initialising optimisation problem (instance of the problem class which is generically set up in
     # optimisation/model/problem.py
     # TODO this should be set back to map_internally = True
-    opt_prob = Problem(config.case_name, setup.obj_func, map_internally=True, n_processors=16)
+    opt_prob = Problem(config.case_name, setup.obj_func, map_internally=True, n_processors=num_cores)
 
     # Set variables, constraints & objectives = call the case setup and add everything
     setup.do(opt_prob)
