@@ -84,8 +84,8 @@ def airfoil_analysis(design, sol_idx, write_quick_history=True, plot=False, prin
                 '''UNCERTAINTY'''
                 design = robust_node_assignment(unc, design, node, fc_idx)
                 # set up the flight condition
-                alpha_init = 0 #-4
-                alpha_final = 4 #14
+                alpha_init = -4
+                alpha_final = 14
                 alpha_step = 0.125
                 target_c_l = design.flight_condition[fc_idx].c_l
                 lift_coefficient = None
